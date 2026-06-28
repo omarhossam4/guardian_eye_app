@@ -1,0 +1,104 @@
+// GuardianEye Firestore security rules.
+//
+// Deploy from the Firebase console (Build → Firestore → Rules) or via the CLI:
+//   firebase deploy --only firestore:rules
+//
+// Flow summary:
+//   - Wearables are provisioned with a stable `device_id` field on their
+//     matching `blind_users/{blindId}` doc.
+//   - The guardian app queries `blind_users where device_id == X`, finds
+//     the matching doc, and adds itself to `linked_guardians`.
+//   - After linking, guardians can read that specific blind user.
+//   - Blind users can still read/update their own doc.
+//   - Unauthenticated clients see nothing.
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── helpers ───────────────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isGuardian() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/guardians/$(request.auth.uid));
+    }
+
+    function onlyAddsSelfToLinkedGuardians() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['linked_guardians'])
+        && (request.resource.data.linked_guardians is list)
+        && (request.auth.uid in request.resource.data.linked_guardians);
+    }
+
+    // ─── guardians ─────────────────────────────────────────────────────
+    match /guardians/{guardianId} {
+      // Signed-in users can read any guardian doc (used during the blind
+      // user's "see who is monitoring me" view). Tighten to "self" if you
+      // don't need this.
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == guardianId;
+      // Updates: the guardian themself, OR another signed-in user who is
+      // touching ONLY `monitored_users` (the blind→guardian back-link
+      // batch). Field-restricted to avoid an attacker rewriting profile.
+      allow update: if isSignedIn() && (
+        request.auth.uid == guardianId
+        || request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['monitored_users'])
+      );
+      allow delete: if false;
+    }
+
+    // ─── blind_users ───────────────────────────────────────────────────
+    match /blind_users/{blindId} {
+      // Read: signed-in users only. Used by the guardian's
+      // `where('device_id', isEqualTo: X)` lookup BEFORE the link exists,
+      // and by linked guardians + the blind user themself afterwards.
+      // (If `blind_users` stores sensitive info, narrow this further.)
+      allow read: if isSignedIn();
+
+      // Create: signed-in (typically the wearable provisioning step or the
+      // blind-side QR flow). Tighten if you have a known service account.
+      allow create: if isSignedIn();
+
+      // Update: blind user updates own doc, OR an already-linked guardian,
+      // OR a signed-in user who is ONLY appending themselves to
+      // `linked_guardians` (the linking handshake).
+      allow update: if isSignedIn() && (
+        resource.data.auth_uid == request.auth.uid
+        || (resource.data.linked_guardians is list
+            && request.auth.uid in resource.data.linked_guardians)
+        || onlyAddsSelfToLinkedGuardians()
+      );
+
+      allow delete: if false;
+    }
+
+    // ─── pairing_handshakes (blind-side QR flow) ───────────────────────
+    // Used if you keep the blind-side passwordless QR onboarding. Safe to
+    // delete this block if that flow is unused in your build.
+    match /pairing_handshakes/{deviceId} {
+      allow create: if request.resource.data.status == 'waiting'
+        && request.resource.data.keys().hasOnly([
+          'status', 'created_at', 'expires_at',
+        ])
+        && request.resource.data.expires_at > request.time;
+      allow read: if true;
+      allow update: if isGuardian()
+        && resource.data.status == 'waiting'
+        && request.resource.data.status == 'completed';
+      allow delete: if true;
+    }
+
+    // ─── catch-all ─────────────────────────────────────────────────────
+    // Telemetry, alerts, locations, settings, etc. — restrict to signed-in
+    // users so unauthenticated clients can't enumerate. Tighten per-feature
+    // (e.g. require guardian-link to read a specific blind user's
+    // telemetry) when you're ready.
+    match /{collection}/{docId} {
+      allow read, write: if isSignedIn();
+    }
+  }
+}

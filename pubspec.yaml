@@ -1,0 +1,105 @@
+name: guardian_eye
+description: Safety. Vision. Care. - Track and support impaired persons with smart device integration.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  
+  # State Management
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+  
+  # Routing
+  go_router: ^14.2.0
+  
+  # Dependency Injection
+  get_it: ^7.7.0
+  
+  # Functional Programming
+  dartz: ^0.10.1
+  
+  # Local Storage
+  shared_preferences: ^2.3.2
+  flutter_secure_storage: ^9.2.2
+  
+  # UI Components
+  flutter_svg: ^2.0.10+1
+  cached_network_image: ^3.4.1
+  
+  # Utilities
+  equatable: ^2.0.5
+  intl: ^0.19.0
+  dio: ^5.7.0
+
+  # Firebase - all must be upgraded together
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
+  cloud_firestore: ^5.4.4
+  
+  # Maps
+  google_maps_flutter: ^2.9.0
+  geolocator: ^13.0.1
+
+  url_launcher: ^6.3.1
+  mailer: ^6.2.0
+
+  # Animations
+  flutter_animate: ^4.5.0
+
+  # QR pairing
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^5.2.3
+
+  # Biometric unlock (blind user)
+  local_auth: ^2.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  riverpod_generator: ^2.4.3
+  build_runner: ^2.4.13
+
+flutter:
+  uses-material-design: true
+  
+  assets:
+    - assets/images/
+    - assets/images/logo/
+    - assets/images/onboarding/
+    - assets/images/roles/
+    - assets/images/placeholders/
+    - assets/icons/
+    - assets/icons/markers/
+    - assets/icons/ui/
+    - assets/animations/
+
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter_18pt-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Inter_18pt-Italic.ttf
+          weight: 400
+          style: italic
+        - asset: assets/fonts/Inter_18pt-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter_18pt-MediumItalic.ttf
+          weight: 500
+          style: italic
+        - asset: assets/fonts/Inter_18pt-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter_18pt-SemiBoldItalic.ttf
+          weight: 600
+          style: italic
+        - asset: assets/fonts/Inter_18pt-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Inter_18pt-BoldItalic.ttf
+          weight: 700
+          style: italic

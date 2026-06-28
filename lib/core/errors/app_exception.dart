@@ -1,0 +1,11 @@
+class AppException implements Exception {
+  const AppException(this.message, {this.statusCode, this.code});
+
+  final String message;
+  final int? statusCode;
+  final String? code;
+
+  @override
+  String toString() =>
+      'AppException(message: $message, statusCode: $statusCode, code: $code)';
+}

@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "18152264008",
+    "firebase_url": "https://ai-assistant-visually-impaired-default-rtdb.europe-west1.firebasedatabase.app",
+    "project_id": "ai-assistant-visually-impaired",
+    "storage_bucket": "ai-assistant-visually-impaired.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:18152264008:android:59ca2cee6a23fadbafa37d",
+        "android_client_info": {
+          "package_name": "com.example.guardian_eye"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCg0-Ky9xWVxB6foGUYstJfdo6olnjjfRo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
