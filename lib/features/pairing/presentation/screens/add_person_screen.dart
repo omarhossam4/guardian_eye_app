@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -50,18 +52,33 @@ class _AddPersonScreenState extends ConsumerState<AddPersonScreen> {
     }
 
     setState(() => _isProcessing = true);
-    final result = await ref
-        .read(guardianDeviceLinkControllerProvider.notifier)
-        .linkByDeviceId(raw);
+    debugPrint('[LINK] handleSubmit start for "$raw"');
+
+    GuardianLinkResult? result;
+    try {
+      result = await ref
+          .read(guardianDeviceLinkControllerProvider.notifier)
+          .linkByDeviceId(raw);
+    } catch (error, stack) {
+      // linkByDeviceId already maps errors into controller state, but guard
+      // here too so an unexpected throw can never strand us in loading.
+      debugPrint('[LINK] linkByDeviceId threw: $error\n$stack');
+      result = null;
+    }
+    debugPrint('[LINK] linkByDeviceId returned: ${result?.blindId ?? 'null'}');
     if (!mounted) return;
 
     if (result != null) {
-      await _scanner?.stop();
-      if (!mounted) return;
+      // Stop the camera, but NEVER let it block the success flow — on some
+      // devices MobileScanner.stop() can stall, which previously left the
+      // screen stuck in "Linking…" with no dialog and no error even though
+      // the link had already succeeded. Fire and forget.
+      unawaited(_safeStopScanner());
       // Ask the guardian what to call this wearable. Skipping (cancel) is
       // allowed — the link is already saved; only the label is optional.
       await _promptForLabel(result);
       if (!mounted) return;
+      debugPrint('[LINK] navigating to guardian home');
       context.go(RoutePaths.guardianHome);
       return;
     }
@@ -70,6 +87,7 @@ class _AddPersonScreenState extends ConsumerState<AddPersonScreen> {
     final message = error is AppException
         ? error.message
         : (error?.toString() ?? 'Could not link this device.');
+    debugPrint('[LINK] link failed: $message');
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -79,127 +97,33 @@ class _AddPersonScreenState extends ConsumerState<AddPersonScreen> {
       ),
     );
 
-    setState(() => _isProcessing = false);
+    if (mounted) setState(() => _isProcessing = false);
     if (overrideId != null) {
       await Future.delayed(const Duration(milliseconds: 600));
       if (!mounted) return;
-      await _scanner?.start();
+      try {
+        await _scanner?.start();
+      } catch (error) {
+        debugPrint('[LINK] scanner restart failed: $error');
+      }
     }
   }
 
-  Future<void> _promptForLabel(GuardianLinkResult linkResult) async {
-    final nameController =
-        TextEditingController(text: linkResult.defaultLabel);
-    final formKey = GlobalKey<FormState>();
-    bool isSaving = false;
+  /// Stops the camera without ever throwing or hanging the caller.
+  Future<void> _safeStopScanner() async {
+    try {
+      await _scanner?.stop().timeout(const Duration(seconds: 2));
+    } catch (error) {
+      debugPrint('[LINK] scanner stop failed/slow (ignored): $error');
+    }
+  }
 
-    await showDialog<void>(
+  Future<void> _promptForLabel(GuardianLinkResult linkResult) {
+    return showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (dialogContext, setLocalState) {
-            return AlertDialog(
-              backgroundColor: AppColors.surface,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(22),
-              ),
-              title: Text('Name this wearable', style: AppTextStyles.h3),
-              content: Form(
-                key: formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Choose a name you will recognize on your dashboard. Only you see this — other guardians can pick their own name.',
-                      style: AppTextStyles.bodySmall.copyWith(
-                        color: AppColors.textSecondary,
-                        height: 1.4,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: nameController,
-                      autofocus: true,
-                      textCapitalization: TextCapitalization.words,
-                      decoration: InputDecoration(
-                        labelText: 'Name',
-                        hintText: 'e.g. Mom, Dad, Sara',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Enter a name';
-                        }
-                        return null;
-                      },
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: isSaving
-                      ? null
-                      : () => Navigator.of(dialogContext).pop(),
-                  child: Text(
-                    'Skip',
-                    style: AppTextStyles.bodyMedium.copyWith(
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ),
-                FilledButton(
-                  onPressed: isSaving
-                      ? null
-                      : () async {
-                          if (!(formKey.currentState?.validate() ?? false)) {
-                            return;
-                          }
-                          setLocalState(() => isSaving = true);
-                          final ok = await ref
-                              .read(guardianDeviceLinkControllerProvider
-                                  .notifier)
-                              .saveLabel(
-                                blindId: linkResult.blindId,
-                                label: nameController.text,
-                              );
-                          if (!dialogContext.mounted) return;
-                          if (ok) {
-                            Navigator.of(dialogContext).pop();
-                          } else {
-                            setLocalState(() => isSaving = false);
-                            ScaffoldMessenger.of(dialogContext).showSnackBar(
-                              const SnackBar(
-                                content: Text('Could not save the name.'),
-                                backgroundColor: AppColors.error,
-                                behavior: SnackBarBehavior.floating,
-                              ),
-                            );
-                          }
-                        },
-                  child: isSaving
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Text('Save'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+      builder: (_) => _LabelDialog(linkResult: linkResult),
     );
-
-    nameController.dispose();
   }
 
   void _openScanner() {
@@ -211,7 +135,7 @@ class _AddPersonScreenState extends ConsumerState<AddPersonScreen> {
   }
 
   Future<void> _closeScanner() async {
-    await _scanner?.stop();
+    await _safeStopScanner();
     if (!mounted) return;
     setState(() => _isScanning = false);
   }
@@ -503,6 +427,137 @@ class _OrSeparator extends StatelessWidget {
           ),
         ),
         Expanded(child: Divider(color: AppColors.border)),
+      ],
+    );
+  }
+}
+
+/// Self-contained dialog that owns its TextEditingController via the State's
+/// lifecycle. The previous version created the controller in the parent
+/// async scope and disposed it the moment `showDialog` returned — that
+/// disposed it mid-exit-animation, while the TextField was still reading
+/// from it, triggering "TextEditingController was used after being disposed".
+class _LabelDialog extends ConsumerStatefulWidget {
+  const _LabelDialog({required this.linkResult});
+
+  final GuardianLinkResult linkResult;
+
+  @override
+  ConsumerState<_LabelDialog> createState() => _LabelDialogState();
+}
+
+class _LabelDialogState extends ConsumerState<_LabelDialog> {
+  late final TextEditingController _nameController;
+  bool _isSaving = false;
+  String? _errorText;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController =
+        TextEditingController(text: widget.linkResult.defaultLabel);
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _onSave() async {
+    final value = _nameController.text.trim();
+    if (value.isEmpty) {
+      setState(() => _errorText = 'Enter a name');
+      return;
+    }
+    setState(() {
+      _errorText = null;
+      _isSaving = true;
+    });
+    final ok = await ref
+        .read(guardianDeviceLinkControllerProvider.notifier)
+        .saveLabel(
+          blindId: widget.linkResult.blindId,
+          label: value,
+        );
+    if (!mounted) return;
+    if (ok) {
+      Navigator.of(context).pop();
+    } else {
+      setState(() => _isSaving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not save the name.'),
+          backgroundColor: AppColors.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: AppColors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(22),
+      ),
+      title: Text('Name this wearable', style: AppTextStyles.h3),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Choose a name you will recognize on your dashboard. Only you see this — other guardians can pick their own name.',
+            style: AppTextStyles.bodySmall.copyWith(
+              color: AppColors.textSecondary,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _nameController,
+            autofocus: true,
+            textCapitalization: TextCapitalization.words,
+            onChanged: (_) {
+              if (_errorText != null) {
+                setState(() => _errorText = null);
+              }
+            },
+            decoration: InputDecoration(
+              labelText: 'Name',
+              hintText: 'e.g. Mom, Dad, Sara',
+              errorText: _errorText,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
+          child: Text(
+            'Skip',
+            style: AppTextStyles.bodyMedium.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
+        ),
+        FilledButton(
+          onPressed: _isSaving ? null : _onSave,
+          child: _isSaving
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text('Save'),
+        ),
       ],
     );
   }

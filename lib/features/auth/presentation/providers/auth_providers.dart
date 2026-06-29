@@ -514,8 +514,10 @@ class GuardianDeviceLinkController
     state = const AsyncValue.loading();
     try {
       final guardianId = _readGuardianId();
+      debugPrint('[LINK] looking up wearable "$trimmed"');
       final blindUser =
           await _firestoreAuthFlowService.findBlindUserByDeviceId(trimmed);
+      debugPrint('[LINK] lookup result: ${blindUser?.blindId ?? 'null'}');
       if (blindUser == null) {
         throw AppException(
           'No wearable matched "$trimmed". Check the code on the device and try again.',
@@ -526,6 +528,7 @@ class GuardianDeviceLinkController
         blindUser: blindUser,
         deviceId: trimmed,
       );
+      debugPrint('[LINK] guardian write committed (or queued)');
       final fallback = blindUser.name.isNotEmpty
           ? blindUser.name
           : 'Wearable $trimmed';

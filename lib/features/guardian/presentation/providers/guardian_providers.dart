@@ -220,34 +220,54 @@ class GuardianDashboardController
   }
 
   Future<ApiResponse<LocationModel>> fetchCurrentLocation(String userId) {
-    return _apiService.getCurrentLocation(userId);
+    // Backend keys location data under the uppercase user id (e.g. `BLIND001`).
+    // Guardians link with whatever casing the Firestore doc carries, so
+    // normalize before hitting the endpoint.
+    return _apiService.getCurrentLocation(userId.trim().toUpperCase());
   }
 
   Future<ApiResponse<List<AlertModel>>> fetchRecentAlerts(String userId) {
-    return _apiService.getRecentAlerts(userId);
+    return _apiService.getRecentAlerts(userId.trim().toUpperCase());
   }
 
   Future<ApiResponse<List<AlertModel>>> fetchAllAlerts(
     List<MonitoredUserModel> monitoredUsers,
   ) async {
     final alerts = <AlertModel>[];
-    for (final user in monitoredUsers) {
-      try {
-        final response = await _apiService.getRecentAlerts(user.id);
-        alerts.addAll(response.data);
-        if (user.uniqueId != user.id) {
+    final seenIds = <String>{};
+    final triedIds = <String>{};
+
+    void addUnique(List<AlertModel> incoming) {
+      for (final alert in incoming) {
+        final key = alert.id.trim();
+        if (key.isEmpty) {
+          // No id — fall back to a composite key so identical events from the
+          // same user at the same instant still de-dupe.
+          final composite =
+              '${alert.userId}|${alert.createdAt.toIso8601String()}|${alert.title}';
+          if (seenIds.add(composite)) alerts.add(alert);
           continue;
         }
-      } catch (_) {
-        if (user.uniqueId == user.id) {
-          continue;
+        if (seenIds.add(key)) alerts.add(alert);
+      }
+    }
+
+    for (final user in monitoredUsers) {
+      final candidates = <String>{
+        user.id.trim().toUpperCase(),
+        user.uniqueId.trim().toUpperCase(),
+      }..removeWhere((id) => id.isEmpty);
+
+      for (final id in candidates) {
+        if (!triedIds.add(id)) continue;
+        try {
+          final response = await _apiService.getRecentAlerts(id);
+          addUnique(response.data);
+          break; // first successful lookup is enough for this user
+        } catch (_) {
+          // try next candidate id
         }
       }
-
-      try {
-        final response = await _apiService.getRecentAlerts(user.uniqueId);
-        alerts.addAll(response.data);
-      } catch (_) {}
     }
 
     alerts.sort((a, b) => b.createdAt.compareTo(a.createdAt));

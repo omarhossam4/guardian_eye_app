@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -106,13 +107,22 @@ class FirestoreAuthFlowService {
     if (normalized.isEmpty) {
       throw const AppException('Enter a device ID.');
     }
-    final query = await _firestore
+    final query = _firestore
         .collection(_blindUsersCollection)
         .where('device_id', isEqualTo: normalized)
-        .limit(1)
-        .get();
-    if (query.docs.isEmpty) return null;
-    return BlindUserProfile.fromSnapshot(query.docs.first);
+        .limit(1);
+
+    // Default get() waits for the server. On a slow connection that can hang
+    // the link flow, so cap it and fall back to the local cache — the wearable
+    // doc is usually already cached from a prior session.
+    QuerySnapshot<Map<String, dynamic>> snapshot;
+    try {
+      snapshot = await query.get().timeout(const Duration(seconds: 6));
+    } on TimeoutException {
+      snapshot = await query.get(const GetOptions(source: Source.cache));
+    }
+    if (snapshot.docs.isEmpty) return null;
+    return BlindUserProfile.fromSnapshot(snapshot.docs.first);
   }
 
   /// Persists the link in both `guardians/{guardianId}` and
@@ -124,19 +134,37 @@ class FirestoreAuthFlowService {
     required BlindUserProfile blindUser,
     required String deviceId,
   }) async {
-    final batch = _firestore.batch();
-    batch.set(
-      _firestore.collection(_guardiansCollection).doc(guardianId),
-      <String, dynamic>{
-        'monitored_users': FieldValue.arrayUnion(<String>[blindUser.blindId]),
-        'updated_at': FieldValue.serverTimestamp(),
-      },
-      SetOptions(merge: true),
+    // The guardian-side write is the one that flips link state and lets the
+    // UI navigate to the dashboard, so issue it on its own (not batched with
+    // the blind-side write, which could stall or roll it back).
+    final guardianWrite = _firestore
+        .collection(_guardiansCollection)
+        .doc(guardianId)
+        .set(<String, dynamic>{
+      'monitored_users': FieldValue.arrayUnion(<String>[blindUser.blindId]),
+      'updated_at': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    // Firestore applies the write to its local cache immediately, but the
+    // returned Future only resolves once the SERVER acknowledges it. On a slow
+    // or dropped connection that ack can take many seconds (or never arrive
+    // while offline) — and awaiting it directly is exactly what freezes the
+    // link screen on "Linking…" even though the link is already effective
+    // locally (Home shows the device linked from cache). So cap the wait: a
+    // genuine permission error still surfaces within the window, but a slow
+    // ack lets us proceed — the write is durably queued and syncs on its own.
+    unawaited(guardianWrite.catchError((_) {})); // don't leak a late ack error
+    await guardianWrite.timeout(
+      const Duration(seconds: 4),
+      onTimeout: () {},
     );
-    batch.update(blindUser.reference, <String, dynamic>{
-      'linked_guardians': FieldValue.arrayUnion(<String>[guardianId]),
-    });
-    await batch.commit();
+
+    // Blind side — best effort, fire and forget. Never block linking on it.
+    unawaited(
+      blindUser.reference.update(<String, dynamic>{
+        'linked_guardians': FieldValue.arrayUnion(<String>[guardianId]),
+      }).catchError((_) {}),
+    );
   }
 
   /// Removes the link from both `guardians/{guardianId}` (pops from
@@ -153,28 +181,47 @@ class FirestoreAuthFlowService {
       throw const AppException('Missing user id.');
     }
 
+    final guardianRef =
+        _firestore.collection(_guardiansCollection).doc(guardianId);
+
+    // `monitored_users` stores blind_users doc ids, but the id we're handed
+    // (from the REST API / dashboard) can differ in casing. arrayRemove is an
+    // exact-string match, so resolve the actual stored entries first and
+    // remove those — otherwise a casing mismatch leaves the entry in place and
+    // the user reappears on the next refresh.
+    final snapshot = await guardianRef.get();
+    final stored = (snapshot.data()?['monitored_users'] as List<dynamic>? ??
+            const <dynamic>[])
+        .map((item) => item.toString())
+        .where((item) => item.trim().isNotEmpty);
+    final toRemove = <String>{
+      id,
+      ...stored.where(
+        (entry) => entry.trim().toLowerCase() == id.toLowerCase(),
+      ),
+    };
+
     // Guardian side — use set+merge so a missing doc / missing fields are
-    // not fatal. arrayRemove on a missing key is a no-op.
-    await _firestore
-        .collection(_guardiansCollection)
-        .doc(guardianId)
-        .set(<String, dynamic>{
-      'monitored_users': FieldValue.arrayRemove(<String>[id]),
+    // not fatal. arrayRemove on a missing value is a no-op.
+    await guardianRef.set(<String, dynamic>{
+      'monitored_users': FieldValue.arrayRemove(toRemove.toList()),
       'monitored_user_labels': <String, dynamic>{
-        id: FieldValue.delete(),
+        for (final entry in toRemove) entry: FieldValue.delete(),
       },
       'updated_at': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
-    // Blind side — best effort, don't surface errors.
-    try {
-      await _firestore
-          .collection(_blindUsersCollection)
-          .doc(id)
-          .update(<String, dynamic>{
-        'linked_guardians': FieldValue.arrayRemove(<String>[guardianId]),
-      });
-    } catch (_) {}
+    // Blind side — best effort, don't surface errors. Cover every matched id.
+    for (final entry in toRemove) {
+      try {
+        await _firestore
+            .collection(_blindUsersCollection)
+            .doc(entry)
+            .update(<String, dynamic>{
+          'linked_guardians': FieldValue.arrayRemove(<String>[guardianId]),
+        });
+      } catch (_) {}
+    }
   }
 
   /// Writes a per-guardian display label for a linked wearable. Stored as
@@ -192,13 +239,19 @@ class FirestoreAuthFlowService {
     if (trimmedLabel.isEmpty) {
       throw const AppException('Enter a name.');
     }
-    await _firestore
+    final write = _firestore
         .collection(_guardiansCollection)
         .doc(guardianId)
         .set(<String, dynamic>{
       'monitored_user_labels': <String, dynamic>{trimmedBlindId: trimmedLabel},
       'updated_at': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+
+    // Same server-ack caveat as linking: don't let a slow ack freeze the
+    // "Save name" dialog — the label is applied to the local cache instantly
+    // and syncs on its own.
+    unawaited(write.catchError((_) {}));
+    await write.timeout(const Duration(seconds: 4), onTimeout: () {});
   }
 
   Future<void> unlinkGuardianFromBlindUser({

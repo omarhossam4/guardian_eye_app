@@ -643,6 +643,12 @@ class _GuardianHomeScreenState extends ConsumerState<GuardianHomeScreen> {
                           backgroundColor: AppColors.error,
                           foregroundColor: Colors.white,
                           elevation: 0,
+                          // The global ElevatedButton theme forces
+                          // minimumSize: Size(double.infinity, 56) to make
+                          // buttons full-width. Inside this Row the width is
+                          // unbounded, so that infinite min-width crashes
+                          // layout — override it back to intrinsic sizing.
+                          minimumSize: const Size(0, 48),
                           padding: const EdgeInsets.symmetric(
                               horizontal: 24, vertical: 12),
                           shape: RoundedRectangleBorder(

@@ -8,7 +8,7 @@ class AppConstants {
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
     defaultValue:
-        'https://ai-assistant-backend-production-a2b0.up.railway.app/api/v1',
+        'https://ai-assistant-backend-production-c250.up.railway.app/api/v1',
   );
   static const String firebaseCollection = 'guardian_eye';
 
